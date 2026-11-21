@@ -115,7 +115,7 @@ typedef __attribute__((aligned(1))) struct _LOGIC_ADC_param
     uint8_t volatile usb_endp2uhsif_total;                                      /* UHSIF RX + USB TX total count */
     uint8_t volatile usb_uhsif_Th0_count;                                       /* UHSIF thread 0 RX count */
     uint8_t volatile usb_uhsif_Th1_count;                                       /* UHSIF thread 1 RX count */
-    uint16_t usb_uhsif_reclen_buf[255];                                         /* UHSIF received data length buffer */
+    uint16_t volatile usb_uhsif_reclen_buf[255];                                /* UHSIF received data length buffer (ISR -> main loop) */
     /* USB status - ADC */
     uint8_t volatile usb30_endp3_up;                                            /* USB3.0 EP3 TX flag (ADC upload) */
     uint8_t volatile usb20_endp3_up;                                            /* USB2.0 EP3 TX flag (ADC upload) */

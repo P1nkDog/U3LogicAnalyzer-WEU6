@@ -94,7 +94,7 @@ void UHSIF_Para_Init(void)
     logic_adc_info.usb_endp2uhsif_total = 0;                     /* UHSIF receive and USB transmit total count */
     logic_adc_info.usb_uhsif_Th0_count = 0;                      /* UHSIF line 0 receive buffer count */
     logic_adc_info.usb_uhsif_Th1_count = 0;                      /* UHSIF line 1 receive buffer count */
-    memset(logic_adc_info.usb_uhsif_reclen_buf, 0x00, 255);      /* UHSIF received data length buffer */
+    memset((void *)logic_adc_info.usb_uhsif_reclen_buf, 0x00, sizeof(logic_adc_info.usb_uhsif_reclen_buf));      /* UHSIF received data length buffer (clear all 510 bytes) */
 }
 
 /*******************************************************************************

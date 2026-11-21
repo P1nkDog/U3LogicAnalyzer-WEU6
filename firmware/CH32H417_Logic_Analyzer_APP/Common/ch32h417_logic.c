@@ -15,11 +15,31 @@
 #include "usb_desc.h"
 
 uint8_t adc_flag = 0;
-volatile uint16_t test_flag = 0;
 volatile uint32_t Flash_Erase_Page_Size = Size_8KB;
 LOGIC_ADC_PARA logic_adc_info;
 __attribute__((aligned(32))) uint16_t ADC_BufA[ADC_BUF_LEN + 1024];    // HADC double buffer 1
 __attribute__((aligned(32))) uint16_t ADC_BufB[ADC_BUF_LEN + 1024];    // HADC double buffer 2
+
+/* ------------------------------------------------------------------------
+ * HSADC dual-buffer hand-off queue (producer: HSADC_IRQHandler, consumer:
+ * LOGIC_ADC_Main_Process).
+ *
+ * Selecting the upload buffer from "usb_endp3_up_count & 1" assumes the 1:1
+ * alternation between ADC_BufA / ADC_BufB can never be broken. Once the reader
+ * falls behind (adc_over: both buffers are full and the ISR has already
+ * re-armed them) that assumption silently breaks and the main loop can upload
+ * a buffer that the DMA is currently filling (torn data) or repeat the same
+ * buffer twice.
+ *
+ * The ISR now records the index of the buffer it has just completed, in
+ * completion order, into a 2-deep queue; the main loop only ever uploads the
+ * index it pops. Producer/consumer cursors are free running and compared
+ * modulo the queue depth, so no wrap-around ambiguity exists.
+ * ------------------------------------------------------------------------ */
+static volatile uint8_t adc_buf_queue[2] = { 0, 0 };    /* 0 = ADC_BufA, 1 = ADC_BufB */
+static volatile uint8_t adc_buf_wr = 0;                 /* ISR write cursor      */
+static volatile uint8_t adc_buf_rd = 0;                 /* main-loop read cursor */
+static volatile uint8_t adc_buf_overflow = 0;           /* dropped frames (reader too slow) */
 
 void HSADC_IRQHandler(void) __attribute__((interrupt("WCH-Interrupt-fast")));
 
@@ -35,7 +55,7 @@ void UHSIF_Clock_Set(uint32_t rcc_pll)
     RCC->CFGR0 = (RCC->CFGR0 & ~RCC_SW) | RCC_SW_HSI;
     while((RCC->CFGR0 & RCC_SWS) != RCC_SWS_HSI);    // Wait for clock to stabilize
 
-    RCC->PLLCFGR &= ~0x80000000;
+    RCC->PLLCFGR &= ~0x80000000u;
     RCC->CTLR &= ~RCC_PLLON;
 
     RCC->PLLCFGR &= (uint32_t)((uint32_t)~(RCC_PLLMUL));
@@ -47,7 +67,7 @@ void UHSIF_Clock_Set(uint32_t rcc_pll)
 
     RCC->CTLR |= RCC_PLLON;
     while((RCC->CTLR & RCC_PLLRDY) == 0);
-    RCC->PLLCFGR |= 0x80000000;
+    RCC->PLLCFGR |= 0x80000000u;
 
     RCC->CFGR0 = (RCC->CFGR0 & ~RCC_SW) | RCC_SW_PLL;    // Switch to PLL clock, wait for clock to stabilize
     while((RCC->CFGR0 & RCC_SWS) != RCC_SWS_PLL);
@@ -67,6 +87,13 @@ void Set_Logic_Para_Fun(uint8_t logic_bit, uint8_t logic_sys)
 {
     uint8_t uhsif_div;
     uint32_t rcc_pll;
+
+    /* Stop the acquisition BEFORE touching the PLL / divider. UHSIF_Clock_Set()
+       reprograms the PLL and then blocks in Delay_Ms(100); if UHSIF were still
+       running during that window it would keep filling the 256 KB buffer while
+       the main loop is stalled, guaranteeing an immediate logic_over. */
+    UHSIF_Start(DISABLE);
+
     switch(logic_sys)
     {
     case 0x00:    // 200M  400/2
@@ -296,6 +323,11 @@ void HSADC_Function_Init(void)
     {
         HSADC_ChannelConfig(HSADC_Channel_3);                                   /* WEU6: PC3 = HSADC3 */
     }
+    /* A previous CMD_SET_ADC_STOP may have left a completed frame in the queue
+       (wr != rd). Re-arm the queue before the DMA / IRQ is allowed to post again. */
+    adc_buf_wr = 0;
+    adc_buf_rd = 0;
+    adc_buf_overflow = 0;
     NVIC_EnableIRQ(HSADC_IRQn);
     NVIC_SetPriority(HSADC_IRQn, 2);
     HSADC_ITConfig(HSADC_IT_DMAEnd, ENABLE);
@@ -340,6 +372,11 @@ void HSADC_Function_Stop(void)
     logic_adc_info.adc_flag = 0;
     HSADC_Cmd(DISABLE);
     NVIC_DisableIRQ(HSADC_IRQn);
+    /* Drop any frame that was completed but not yet uploaded, so the next
+       CMD_SET_ADC_START always begins from a clean, empty queue. */
+    adc_buf_wr = 0;
+    adc_buf_rd = 0;
+    adc_buf_overflow = 0;
     HSADC->STATR = 0x07;
     RCC_HB2PeriphResetCmd(RCC_HB2Periph_HSADC, ENABLE);
     Delay_Ms(10);
@@ -531,7 +568,7 @@ void LOGIC_ADC_CMD_Process(void)
         {
             USBHSD->UEP1_TX_DMA = (uint32_t)USBSS_EP1_Tx_Buf;
             USBHSD->UEP1_TX_LEN = 32;
-            USBHSD->UEP1_TX_CTRL = (USBHSD->UEP2_TX_CTRL & ~USBHS_UEP_T_RES_MASK) | USBHS_UEP_T_RES_ACK;
+            USBHSD->UEP1_TX_CTRL = (USBHSD->UEP1_TX_CTRL & ~USBHS_UEP_T_RES_MASK) | USBHS_UEP_T_RES_ACK;
         }
         len = 0;
     }
@@ -559,9 +596,68 @@ void LOGIC_ADC_CMD_Send(uint8_t cmd, uint8_t status)
     {
         USBHSD->UEP1_TX_DMA = (uint32_t)USBSS_EP1_Tx_Buf;
         USBHSD->UEP1_TX_LEN = 32;
-        USBHSD->UEP1_TX_CTRL = (USBHSD->UEP2_TX_CTRL & ~USBHS_UEP_T_RES_MASK) | USBHS_UEP_T_RES_ACK;
+        USBHSD->UEP1_TX_CTRL = (USBHSD->UEP1_TX_CTRL & ~USBHS_UEP_T_RES_MASK) | USBHS_UEP_T_RES_ACK;
     }
 }
+/*********************************************************************
+ * @fn      LOGIC_Upload_State_Reset
+ *
+ * @brief   Re-synchronise the upload book-keeping after the USB link has been
+ *          re-negotiated (unplug, bus reset, or a USB3.0 <-> USB2.0 fallback).
+ *
+ *          logic_adc_info.usb_status is written by the USB ISRs only, which do
+ *          not touch the upload cursors. Without this clean-up the first packets
+ *          after a reconnect are taken from a stale buffer pointer / stale
+ *          buffer index, and the "USB activity" LED keeps blinking because
+ *          usb_trans_flag is never cleared.
+ *
+ * @return  none
+ */
+static void LOGIC_Upload_State_Reset(void)
+{
+    NVIC_DisableIRQ(UHSIF_IRQn);
+    NVIC_DisableIRQ(USBSS_IRQn);
+    NVIC_DisableIRQ(USBHS_IRQn);
+    NVIC_DisableIRQ(HSADC_IRQn);
+
+    /* Stop the UHSIF engine and re-initialise its internal book-keeping as well.
+       Only resetting the reader-side cursors would leave the driver's own write
+       pointers (usb_endp2uhsif_total / usb_uhsif_Th0/Th1_count) stale, so after a
+       bus reset or a USB3.0 <-> USB2.0 fallback both sides would disagree about
+       which socket the next 16 KB burst belongs to. */
+    UHSIF_Start(DISABLE);
+    UHSIF_Para_Init();
+
+    /* UHSIF -> EP2 stream (reader side) */
+    logic_adc_info.usb_endp2_up_count = 0;
+    logic_adc_info.pusb_endp2_th0_up = USBSS_EP2_Tx_Th0_Buf;
+    logic_adc_info.pusb_endp2_th1_up = USBSS_EP2_Tx_Th1_Buf;
+
+    /* HSADC -> EP3 stream (reader side + completion queue) */
+    logic_adc_info.usb_endp3_up_count = 0;
+    adc_buf_rd = adc_buf_wr;                                                            /* drop pending frames, keep both cursors consistent */
+    adc_buf_overflow = 0;
+    logic_adc_info.adc_rec_total = 0;
+
+    /* Status flags / activity LED */
+    logic_adc_info.usb_ram_over_flag = 0;
+    logic_adc_info.usb_trans_flag = DISABLE;
+    logic_adc_info.usb_trans_count = 0;
+    if(logic_adc_info.usb_status == USB_NO_CONNECT)
+    {
+        USB_LINK_OFF();                                                                 /* link down: LED off (also stops a leftover blink) */
+    }
+    else
+    {
+        USB_LINK_ON();                                                                  /* link up: keep the LED on, do not extinguish it */
+    }
+
+    NVIC_EnableIRQ(HSADC_IRQn);
+    NVIC_EnableIRQ(UHSIF_IRQn);
+    NVIC_EnableIRQ(USBSS_IRQn);
+    NVIC_EnableIRQ(USBHS_IRQn);
+}
+
 /*********************************************************************
  * @fn      LOGIC_UHSIF_Main_Process
  *
@@ -572,6 +668,15 @@ void LOGIC_ADC_CMD_Send(uint8_t cmd, uint8_t status)
 void LOGIC_UHSIF_Main_Process(void)
 {
     uint16_t len, temp, temp1;
+    static uint8_t last_usb_status = USB_NO_CONNECT;
+
+    /* Detect unplug / bus-reset / speed fallback and clean the stream state */
+    if(logic_adc_info.usb_status != last_usb_status)
+    {
+        last_usb_status = logic_adc_info.usb_status;
+        LOGIC_Upload_State_Reset();
+    }
+
     if(logic_adc_info.usb_status == USB_U3_CONNECT)
     {    // USB3.0 connected
         if((logic_adc_info.usb30_endp2_up == USB_SUCESEE_FLAG) && logic_adc_info.usb_endp2uhsif_total)
@@ -685,17 +790,34 @@ void LOGIC_UHSIF_Main_Process(void)
  */
 void HSADC_IRQHandler(void)
 {
+    uint8_t buf_idx;
+
     if(HSADC_GetITStatus(HSADC_IT_DMAEnd))
     {
         if((HSADC->STATR & 0x10))
         {    // Buffer A ready to send; Buffer B receiving ADC
             HSADC->ADDR0 = (uint32_t)ADC_BufA;
+            buf_idx = 0;                                                                            // completed buffer = A
         }
         else
         {
             HSADC->ADDR1 = (uint32_t)ADC_BufB;                                                      // Buffer B ready to send; Buffer A receiving ADC
+            buf_idx = 1;                                                                            // completed buffer = B
         }
-        logic_adc_info.adc_rec_total++;
+        /* Publish the completed buffer to the main loop. If both buffers are still
+           un-sent (reader too slow) the newest one is dropped: the queue must never
+           contain a buffer that the DMA is about to overwrite, otherwise the host
+           would receive a torn frame. */
+        if((uint8_t)(adc_buf_wr - adc_buf_rd) < 2)
+        {
+            adc_buf_queue[adc_buf_wr & 0x01] = buf_idx;
+            adc_buf_wr++;
+            logic_adc_info.adc_rec_total++;
+        }
+        else
+        {
+            adc_buf_overflow++;
+        }
         HSADC_ClearITPendingBit(HSADC_IT_DMAEnd);
     }
 }
@@ -709,25 +831,22 @@ void HSADC_IRQHandler(void)
  */
 void LOGIC_ADC_Main_Process(void)
 {
+    uint8_t buf_idx;
+
     if(logic_adc_info.usb_status == USB_U3_CONNECT)
     {    // Connected as USB3.0
         if((logic_adc_info.usb30_endp3_up == USB_SUCESEE_FLAG) && logic_adc_info.adc_rec_total)
         {
             logic_adc_info.usb30_endp3_up = USB_BUSY_FLAG;                                          // Set USB3.0 endpoint 2 busy
-            if((logic_adc_info.usb_endp3_up_count & 0x01) == 0)
-            {    // Even: use buffer A
-                USBSSD->EP3_TX.UEP_TX_DMA = (uint32_t)ADC_BufA;
-            }
-            else
-            {    // Odd: use buffer B
-                USBSSD->EP3_TX.UEP_TX_DMA = (uint32_t)ADC_BufB;
-            }
+            buf_idx = adc_buf_queue[adc_buf_rd & 0x01];                                             // buffer reported by HSADC_IRQHandler
+            USBSSD->EP3_TX.UEP_TX_DMA = (uint32_t)(buf_idx ? ADC_BufB : ADC_BufA);
             USBSSD->EP3_TX.UEP_TX_CHAIN_LEN = DEF_USB_EP2_SS_SIZE;
             USBSSD->EP3_TX.UEP_TX_CHAIN_EXP_NUMP = 16;                                              // ADC_BUF_LEN/DEF_USB_EP2_SS_SIZE
             logic_adc_info.usb_endp3_up_count++;
             __asm("fence");
             NVIC_DisableIRQ(USBSS_IRQn);
             NVIC_DisableIRQ(HSADC_IRQn);
+            adc_buf_rd++;
             logic_adc_info.adc_rec_total--;
             NVIC_EnableIRQ(HSADC_IRQn);
             NVIC_EnableIRQ(USBSS_IRQn);
@@ -739,20 +858,15 @@ void LOGIC_ADC_Main_Process(void)
         if((logic_adc_info.usb20_endp3_up == USB_SUCESEE_FLAG) && logic_adc_info.adc_rec_total)
         {    // Buffer has data, USB can send
             logic_adc_info.usb20_endp3_up = USB_BUSY_FLAG;
-            if((logic_adc_info.usb_endp3_up_count & 0x01) == 0)
-            {    // Even: use buffer A
-                USBHSD->UEP3_TX_DMA = (uint32_t)ADC_BufA;
-            }
-            else
-            {    // Odd: use buffer B
-                USBHSD->UEP3_TX_DMA = (uint32_t)ADC_BufB;
-            }
+            buf_idx = adc_buf_queue[adc_buf_rd & 0x01];                                             // buffer reported by HSADC_IRQHandler
+            USBHSD->UEP3_TX_DMA = (uint32_t)(buf_idx ? ADC_BufB : ADC_BufA);
             USBHSD->UEP3_TX_LEN = ADC_BUF_LEN;
             USBHSD->UEP3_TX_CTRL = (USBHSD->UEP3_TX_CTRL & ~USBHS_UEP_T_RES_MASK) | USBHS_UEP_T_RES_ACK;
             logic_adc_info.usb_endp3_up_count++;
             __asm("fence");
             NVIC_DisableIRQ(USBHS_IRQn);
             NVIC_DisableIRQ(HSADC_IRQn);
+            adc_buf_rd++;
             logic_adc_info.adc_rec_total--;
             NVIC_EnableIRQ(HSADC_IRQn);
             NVIC_EnableIRQ(USBHS_IRQn);
@@ -772,18 +886,22 @@ void LOGIC_ADC_RAMOVER_Process(void)
 {
     if(logic_adc_info.usb_endp2uhsif_total >= 8 * 2)
     {
-        DBG_PRINT("logic_over\n");
+        /* Report / print ONCE per acquisition session. Printing on every main-loop
+           iteration would block ~120 us on the 921600-baud UART, which drops the
+           EP2 drain rate below the UHSIF fill rate -> positive-feedback deadlock
+           that can never clear by itself. */
         if( logic_adc_info.usb_ram_over_flag == 0 )
         {
+            DBG_PRINT("logic_over\n");
             LOGIC_ADC_CMD_Send( CMD_LOGIC_OVER,LOGIC_RAM_OVER );
             logic_adc_info.usb_ram_over_flag = 1;
         }
     }
     if(logic_adc_info.adc_rec_total >= 2)
     {
-        DBG_PRINT("adc_over\n");
         if( logic_adc_info.usb_ram_over_flag == 0 )
         {
+            DBG_PRINT("adc_over %d\n", adc_buf_overflow);                       /* dropped frames since last start / reconnect */
             LOGIC_ADC_CMD_Send( CMD_LOGIC_OVER,ADC_RAM_OVER );
             logic_adc_info.usb_ram_over_flag = 1;
         }
