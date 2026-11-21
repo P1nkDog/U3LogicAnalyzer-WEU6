@@ -141,14 +141,15 @@ void USART_Printf_Init(uint32_t baudrate)
     GPIO_Init(GPIOB, &GPIO_InitStructure);
 
 #elif(DEBUG == DEBUG_UART6)
-    RCC_HB2PeriphClockCmd(RCC_HB2Periph_AFIO | RCC_HB2Periph_GPIOA, ENABLE);
+    /* WEU6: DEBUG_UART6 TX = PD1 (AF8) */
+    RCC_HB2PeriphClockCmd(RCC_HB2Periph_AFIO | RCC_HB2Periph_GPIOD, ENABLE);
     RCC_HB1PeriphClockCmd(RCC_HB1Periph_USART6, ENABLE);
-    GPIO_PinAFConfig(GPIOA, GPIO_PinSource12, GPIO_AF6);
+    GPIO_PinAFConfig(GPIOD, GPIO_PinSource1, GPIO_AF8);
 
-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_12;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_1;
     GPIO_InitStructure.GPIO_Speed = GPIO_Speed_Very_High;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
-    GPIO_Init(GPIOA, &GPIO_InitStructure);
+    GPIO_Init(GPIOD, &GPIO_InitStructure);
 
 
     // RCC_HB2PeriphClockCmd(RCC_HB2Periph_AFIO | RCC_HB2Periph_GPIOB, ENABLE);

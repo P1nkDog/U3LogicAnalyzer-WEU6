@@ -213,7 +213,7 @@ void Dac_Init(void)
     RCC_HB2PeriphClockCmd(RCC_HB2Periph_GPIOA, ENABLE);
     RCC_HB1PeriphClockCmd(RCC_HB1Periph_DAC, ENABLE);
 
-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_4;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_5;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AIN;
     GPIO_Init(GPIOA, &GPIO_InitStructure);
 
@@ -221,9 +221,9 @@ void Dac_Init(void)
     DAC_InitType.DAC_WaveGeneration = DAC_WaveGeneration_None;
     DAC_InitType.DAC_LFSRUnmask_TriangleAmplitude = DAC_LFSRUnmask_Bit0;
     DAC_InitType.DAC_OutputBuffer = DAC_OutputBuffer_Enable;
-    DAC_Init(DAC_Channel_1, &DAC_InitType);
-    DAC_Cmd(DAC_Channel_1, ENABLE);
-    DAC_SetChannel1Data(DAC_Align_12b_R, 34);    // Default output 0, voltage 3.3V
+    DAC_Init(DAC_Channel_2, &DAC_InitType);
+    DAC_Cmd(DAC_Channel_2, ENABLE);
+    DAC_SetChannel2Data(DAC_Align_12b_R, 34);    // Default output 0, voltage 3.3V (WEU6: PA5 / VIOH_SET / DAC2)
 }
 
 /*********************************************************************
@@ -235,7 +235,7 @@ void Dac_Init(void)
  */
 void DAC_OUT(uint16_t dac_value)
 {
-    DAC_SetChannel1Data(DAC_Align_12b_R, dac_value);
+    DAC_SetChannel2Data(DAC_Align_12b_R, dac_value);                            /* WEU6: DAC2 on PA5 */
 }
 
 /*********************************************************************
@@ -250,15 +250,15 @@ void HSADC_Function_Init(void)
     GPIO_InitTypeDef GPIO_InitStructure = { 0 };
     if(logic_adc_info.adc_channel == ADC_CHANNEL0)
     {
-        GPIO_InitStructure.GPIO_Pin = GPIO_Pin_8;
+        GPIO_InitStructure.GPIO_Pin = GPIO_Pin_2;                               /* WEU6: L_ADC0 = PC2 */
         GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AIN;
-        GPIO_Init(GPIOF, &GPIO_InitStructure);
+        GPIO_Init(GPIOC, &GPIO_InitStructure);
     }
     else if(logic_adc_info.adc_channel == ADC_CHANNEL1)
     {
-        GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9;
+        GPIO_InitStructure.GPIO_Pin = GPIO_Pin_3;                               /* WEU6: L_ADC1 = PC3 */
         GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AIN;
-        GPIO_Init(GPIOF, &GPIO_InitStructure);
+        GPIO_Init(GPIOC, &GPIO_InitStructure);
     }
     HSADC_InitStructure.HSADC_BurstMode = ENABLE;
         if(logic_adc_info.adc_bit == ADC_GET_WIDTH8)
@@ -290,11 +290,11 @@ void HSADC_Function_Init(void)
     HSADC_Init(&HSADC_InitStructure);
     if(logic_adc_info.adc_channel == ADC_CHANNEL0)
     {
-        HSADC_ChannelConfig(HSADC_Channel_4);
+        HSADC_ChannelConfig(HSADC_Channel_2);                                   /* WEU6: PC2 = HSADC2 */
     }
     else if(logic_adc_info.adc_channel == ADC_CHANNEL1)
     {
-        HSADC_ChannelConfig(HSADC_Channel_5);
+        HSADC_ChannelConfig(HSADC_Channel_3);                                   /* WEU6: PC3 = HSADC3 */
     }
     NVIC_EnableIRQ(HSADC_IRQn);
     NVIC_SetPriority(HSADC_IRQn, 2);
@@ -315,6 +315,10 @@ void HSADC_Function_Init(void)
  */
 void HSADC_Function_Start(void)
 {
+    /* WEU6: VIOH_SET is driven by DAC2 (PA5); force the threshold back to the
+       3.3V safe level before UHSIF_Clock_Set() reprograms the PLL. */
+    DAC_SetChannel2Data(DAC_Align_12b_R, 34);
+    Delay_Ms(10);
     UHSIF_Clock_Set(RCC_PLLMUL16);    // Configure system PLL clock, 400M system clock 26-05-09
     HSADC_Function_Init();
     HSADC_Cmd(ENABLE);
@@ -340,6 +344,7 @@ void HSADC_Function_Stop(void)
     RCC_HB2PeriphResetCmd(RCC_HB2Periph_HSADC, ENABLE);
     Delay_Ms(10);
     RCC_HB2PeriphResetCmd(RCC_HB2Periph_HSADC, DISABLE);
+    DAC_OUT(logic_adc_info.logic_level);                                        /* WEU6: restore VIOH_SET threshold after ADC stop */
 }
 
 /*********************************************************************
@@ -365,7 +370,7 @@ void LOGIC_Para_Init(void)
     logic_adc_info.adc_channel = 0;
     logic_adc_info.adc_flag = 0;
     logic_adc_info.usb_ram_over_flag = 0;
-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_3 | GPIO_Pin_4;      //usb link && usb trans
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0 | GPIO_Pin_1;      //usb link && usb trans (WEU6: PB0=LED1, PB1=LED2)
     GPIO_InitStructure.GPIO_Speed = GPIO_Speed_Very_High;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;              
     GPIO_Init(GPIOB, &GPIO_InitStructure);

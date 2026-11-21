@@ -68,11 +68,11 @@ extern "C"
 #define CheckNum            (0x5aa55aa5)                                        /* IAP flag check value */
 
 
-#define	USB_RUN_OFF()	{ GPIOB->BSHR = GPIO_Pin_3; }		//PB3 HIGH
-#define	USB_RUN_ON()	{ GPIOB->BCR  = GPIO_Pin_3; }		//PB3 LOW
+#define	USB_RUN_OFF()	{ GPIOB->BSHR = GPIO_Pin_0; }		//PB0 HIGH (WEU6 LED1)
+#define	USB_RUN_ON()	{ GPIOB->BCR  = GPIO_Pin_0; }		//PB0 LOW (WEU6 LED1)
 
-#define	USB_LINK_OFF()	{ GPIOB->BSHR = GPIO_Pin_4; }		//PB4 HIGH
-#define	USB_LINK_ON()	{ GPIOB->BCR  = GPIO_Pin_4; }		//PB4 LOW
+#define	USB_LINK_OFF()	{ GPIOB->BSHR = GPIO_Pin_1; }		//PB1 HIGH (WEU6 LED2)
+#define	USB_LINK_ON()	{ GPIOB->BCR  = GPIO_Pin_1; }		//PB1 LOW (WEU6 LED2)
 
 
 typedef __attribute__((aligned(1))) struct _LOGIC_param

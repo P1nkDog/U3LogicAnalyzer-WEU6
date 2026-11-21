@@ -30,10 +30,10 @@
 #ifndef DEBUG
 
 #ifdef Core_V3F
-#define DEBUG   DEBUG_UART1
+#define DEBUG   DEBUG_UART6
 
 #elif defined(Core_V5F)
-#define DEBUG   DEBUG_UART1
+#define DEBUG   DEBUG_UART6
 
 #endif
 
