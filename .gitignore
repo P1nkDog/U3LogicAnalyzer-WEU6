@@ -1,0 +1,23 @@
+# Build outputs & MounRiver generated makefiles (contain host-specific paths)
+**/obj/
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+**/.mrs/
+
+# Keep closed-source WCH UHSIF library object required for linking
+!**/Common/ch32h417_uhsif_it.o
+
+# Local PC host software & precompiled binaries (not tracked in firmware repo)
+U3LogicAnalyzer-pre0v5-windows/
+U3LogicAnalyzer_pre0v5/
+
+# OS & Editor temporary files
+.DS_Store
+Thumbs.db
+*~
+*.swp
