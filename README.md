@@ -63,7 +63,7 @@ U3LogicAnalyzer-WEU6/
 | **示波器通道 1** | `HSADC5` / `PF9`（脚 20）→ `HSADC1` | `HSADC3` / `PC3`（脚 18）→ `L_ADC1` | 是 |
 | **状态 LED 1** | `PB3`（脚 115），串 1 kΩ | `PB0`（脚 21），串 5.1 kΩ | 是 |
 | **状态 LED 2** | `PB4`（脚 116），串 1 kΩ | `PB1`（脚 22），串 5.1 kΩ | 是 |
-| **UHSIF 重映射** | `DEF_UHSIF_PINREMAP2` | `DEF_UHSIF_PINREMAP0` | 是 |
+| **UHSIF 重映射** | `DEF_UHSIF_PINREMAP2`（`UHSIF_PORT_RM=1x`） | `DEF_UHSIF_PINREMAP2`（保持与上游一致，同为 `1x`） | 否 |
 | **采样时钟抽头** | `PC0`（脚 26）→ 网 `P_CLK`，仅接测试点 TP1 | `PC0`（脚 15）**未连接**（原版本就只作测试点） | 否 |
 | **USB 3.0 SS** | `SSTXA/B` `SSRXA/B`（脚 124/123/127/126） | `SSTXA/B` `SSRXA/B`（脚 2/1/5/4），均经 CH9441P | 否 |
 | **USB 2.0** | `PB8` / `PB9`（脚 120/121） | `PB8` / `PB9`（脚 67/68） | 否 |
@@ -77,6 +77,15 @@ U3LogicAnalyzer-WEU6/
 | 通道 | D8 | D9 | D10 | D11 | D12 | D13 | D14 | D15 |
 |---|---|---|---|---|---|---|---|---|
 | 引脚 | `PF2` | `PC6` | `PC7` | `PC8` | `PC9` | `PA13` | `PA14` | `PA15` |
+
+> **UHSIF 端口重映射：保持 `DEF_UHSIF_PINREMAP2`**
+>
+> - 反汇编 `UHSIF_GPIO_Init()` 证实，该参数经 `slli ... ,8` 后直接写入 `AFIO_PCFR1` 的
+>   `UHSIF_PORT_RM[9:8]` 位域，**无任何查表或分支转换**；故 `PINREMAP2` 对应 `UHSIF_PORT_RM=1x`。
+> - `CH32H417RM` 表 9-33 中 `UHSIF_PORT_RM=1x` 列的 `PORT16…PORT31` 映射正是本板
+>   `D0…D15`（`PD10…PD15` / `PF0…PF2` / `PC6…PC9` / `PA13…PA15`）的顺序；
+>   而 `RM=00` 列只定义 `PORT0…PORT7`，`PORT16…PORT31` 为空。
+> - 早期移植曾改为 `PINREMAP0`，已回退至上游原版取值。**实机 B 组测试：16 通道波形准确。**
 
 **模拟前端差异（硬件侧）**：QEU6 原版为 1 kΩ 串阻 + 7 pF 对地；WEU6 板为 499 Ω 串阻 + TVS 钳位（`H5VU25U`）
 + 100 kΩ 上/下拉，模拟前端置于外部模块，经 36P（1.27 mm）连接器接入。
@@ -103,15 +112,19 @@ Windows 平台使用 MSYS2 MINGW64 工具链（`glib2` / `glibmm` / `libusb` / `
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| **Commit 1** | Q2H2 原版 v2.0 纯净基线（`firmware/` + `hardware/`） | ✅ 本提交 |
-| Commit 2 | 硬件外设适配：DAC `PA4→PA5` / `DAC1→DAC2`；HSADC `PF8/PF9→PC2/PC3`、`CH4/5→CH2/3`；LED `PB3/PB4→PB0/PB1`；UART `PA9→PD1`（`UART1→UART6`）；UHSIF `PINREMAP2→PINREMAP0`；`hardware.c` ADC 时钟 `GPIOF→GPIOC` | 待办 |
-| Commit 3 | 高采样率稳定性优化：HSADC 双缓冲交接队列、USB 重连状态复位、切档时序修正、溢出上报限流 | 待办 |
-| Commit 4 | 文档与构建脚本完善：`.gitignore` 校验、双核合并镜像生成脚本、引脚校验清单 | 待办 |
+| **Commit 1** | Q2H2 原版 v2.0 纯净基线（`firmware/` + `hardware/`） | ✅ `1824a6f` |
+| Commit 2 | 硬件外设适配：DAC `PA4→PA5` / `DAC1→DAC2`；HSADC `PF8/PF9→PC2/PC3`、`CH4/5→CH2/3`；LED `PB3/PB4→PB0/PB1`；UART `PA9→PD1`（`UART1→UART6`）；`hardware.c` ADC 时钟 `GPIOF→GPIOC` | ✅ `f24ea6d` |
+| Commit 3 | 高采样率稳定性优化：HSADC 双缓冲交接队列、USB 重连状态复位、切档时序修正、USB 2.0 `UEP1_TX_CTRL` 偏移修正、溢出上报限流 | ✅ `455e129` |
+| Commit 4 | UHSIF 端口映射回归 `DEF_UHSIF_PINREMAP2`（对齐上游与手册表 9-33）；补充 200 MHz 带宽实测结论与合并镜像说明 | ✅ 本提交 |
 
 ### 已知限制
 
-- `PINREMAP0` 与 `PINREMAP2` 在**同一组 16 引脚**上的位序/极性是否等价，尚待查阅
-  `CH32H417RM` 的 UHSIF 复用章节或实机验证。
+- **USB 3.0 Gen1 带宽是硬上限**：16 通道 @ 200 MHz = `200 MSa/s × 16 bit` = **400 MB/s**，
+  与 USB 3.0 Gen1（5 GT/s、8b/10b 编码）的 bulk 净荷上限（约 400 MB/s）**基本相等，工程余量为零**。
+  设备侧缓冲仅 2 × 128 KB = 256 KB（≈ 655 µs），主机侧约 8 MB（≈ 20 ms）；任一侧停顿超过约 20 ms
+  即触发 `logic_over`，上位机弹出"采集期间发生硬件溢出，部分数据可能已丢失"。
+  **长时间连续采集建议 ≤ 162.5 MHz（325 MB/s），或改用 8 通道 @ 200 MHz（200 MB/s）。**
+  该现象属物理带宽限制，不是固件缺陷；固件已做到"溢出只上报一次、不再自锁"。
 - UHSIF 底层实现位于闭源预编译库 `Common/ch32h417_uhsif_it.o`，无源码；该文件是链接必需项，
   故在 `.gitignore` 中被显式保留（`!**/Common/ch32h417_uhsif_it.o`）。
 - IAP 引导固件不含 UHSIF，因此其中没有 `ch32h417_uhsif_it.o`。
@@ -173,7 +186,7 @@ Source: measured netlists (`.enet`) of both boards — not inferred.
 | **Scope channel 1** | `HSADC5` / `PF9` (pin 20) → `HSADC1` | `HSADC3` / `PC3` (pin 18) → `L_ADC1` | Yes |
 | **Status LED 1** | `PB3` (pin 115), 1 kΩ | `PB0` (pin 21), 5.1 kΩ | Yes |
 | **Status LED 2** | `PB4` (pin 116), 1 kΩ | `PB1` (pin 22), 5.1 kΩ | Yes |
-| **UHSIF pin-remap** | `DEF_UHSIF_PINREMAP2` | `DEF_UHSIF_PINREMAP0` | Yes |
+| **UHSIF pin-remap** | `DEF_UHSIF_PINREMAP2` (`UHSIF_PORT_RM=1x`) | `DEF_UHSIF_PINREMAP2` (unchanged, same `1x`) | No |
 | **Sampling clock tap** | `PC0` (pin 26) → `P_CLK`, test point TP1 only | `PC0` (pin 15) unconnected (upstream was TP-only too) | No |
 | **USB 3.0 SS** | `SSTXA/B` `SSRXA/B` (pins 124/123/127/126) | `SSTXA/B` `SSRXA/B` (pins 2/1/5/4), both via CH9441P | No |
 | **USB 2.0** | `PB8` / `PB9` (pins 120/121) | `PB8` / `PB9` (pins 67/68) | No |
@@ -187,6 +200,17 @@ Source: measured netlists (`.enet`) of both boards — not inferred.
 | Ch | D8 | D9 | D10 | D11 | D12 | D13 | D14 | D15 |
 |---|---|---|---|---|---|---|---|---|
 | Pin | `PF2` | `PC6` | `PC7` | `PC8` | `PC9` | `PA13` | `PA14` | `PA15` |
+
+> **UHSIF port remap: kept at `DEF_UHSIF_PINREMAP2`**
+>
+> - Disassembly of `UHSIF_GPIO_Init()` shows the argument is shifted left by 8 and written straight into
+>   `AFIO_PCFR1.UHSIF_PORT_RM[9:8]` — **no lookup table, no branch translation**. Hence `PINREMAP2`
+>   equals `UHSIF_PORT_RM=1x`.
+> - In `CH32H417RM` Table 9-33 the `UHSIF_PORT_RM=1x` column maps `PORT16…PORT31` exactly to this board's
+>   `D0…D15` (`PD10…PD15` / `PF0…PF2` / `PC6…PC9` / `PA13…PA15`); the `RM=00` column only defines
+>   `PORT0…PORT7` and leaves `PORT16…PORT31` blank.
+> - An earlier port step switched this to `PINREMAP0`; it has been reverted to the upstream value.
+>   **Bench-tested (group B): all 16 channels decode correctly.**
 
 **Analog front-end difference (hardware)**: QEU6 uses 1 kΩ series + 7 pF to ground; the WEU6 board uses
 499 Ω series + TVS clamp (`H5VU25U`) + 100 kΩ pull, with the analog front-end on an external module
@@ -214,15 +238,21 @@ Not tracked in this repository. Built with CMake; on Windows use the MSYS2 MINGW
 
 | Stage | Content | Status |
 |---|---|---|
-| **Commit 1** | Pristine Q2H2 v2.0 baseline (`firmware/` + `hardware/`) | ✅ this commit |
-| Commit 2 | Peripheral adaptation: DAC `PA4→PA5` / `DAC1→DAC2`; HSADC `PF8/PF9→PC2/PC3`, `CH4/5→CH2/3`; LED `PB3/PB4→PB0/PB1`; UART `PA9→PD1` (`UART1→UART6`); UHSIF `PINREMAP2→PINREMAP0`; ADC clock `GPIOF→GPIOC` in `hardware.c` | Planned |
-| Commit 3 | High-sample-rate stability: HSADC double-buffer hand-off queue, USB reconnect state reset, sample-rate switch sequencing, overflow report throttling | Planned |
-| Commit 4 | Docs & build tooling: `.gitignore` validation, merged-image generation script, pin check list | Planned |
+| **Commit 1** | Pristine Q2H2 v2.0 baseline (`firmware/` + `hardware/`) | ✅ `1824a6f` |
+| Commit 2 | Peripheral adaptation: DAC `PA4→PA5` / `DAC1→DAC2`; HSADC `PF8/PF9→PC2/PC3`, `CH4/5→CH2/3`; LED `PB3/PB4→PB0/PB1`; UART `PA9→PD1` (`UART1→UART6`); ADC clock `GPIOF→GPIOC` in `hardware.c` | ✅ `f24ea6d` |
+| Commit 3 | High-sample-rate stability: HSADC double-buffer hand-off queue, USB reconnect state reset, sample-rate switch sequencing, USB 2.0 `UEP1_TX_CTRL` offset fix, overflow report throttling | ✅ `455e129` |
+| Commit 4 | UHSIF pin-remap restored to `DEF_UHSIF_PINREMAP2` (aligned with upstream and RM Table 9-33); 200 MHz bandwidth measurements and merged-image notes added | ✅ this commit |
 
 ### Known limitations
 
-- Whether `PINREMAP0` and `PINREMAP2` map the **same 16 pins** with identical bit order/polarity is still
-  unverified — needs the UHSIF multiplexing chapter of `CH32H417RM` or a bench test.
+- **USB 3.0 Gen1 bandwidth is a hard ceiling**: 16 channels @ 200 MHz = `200 MSa/s × 16 bit` =
+  **400 MB/s**, essentially equal to the USB 3.0 Gen1 (5 GT/s, 8b/10b) bulk payload limit (~400 MB/s),
+  i.e. **zero engineering margin**. The device holds only 2 × 128 KB = 256 KB (≈ 655 µs) and the host
+  side roughly 8 MB (≈ 20 ms); any stall longer than ~20 ms raises `logic_over` and the host shows
+  "hardware overflow during acquisition, some data may be lost".
+  **For sustained capture use ≤ 162.5 MHz (325 MB/s), or 8 channels @ 200 MHz (200 MB/s).**
+  This is a physical bandwidth limit, not a firmware defect; the firmware now reports it once
+  per session instead of self-locking.
 - The UHSIF low-level implementation is a closed-source precompiled object
   (`Common/ch32h417_uhsif_it.o`) with no source available; it is required for linking, hence explicitly
   preserved in `.gitignore` (`!**/Common/ch32h417_uhsif_it.o`).
